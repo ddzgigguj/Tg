@@ -49,7 +49,13 @@ class BalanceManager:
 
     def scaled_bets(self) -> BetSizes:
         bal = self.current()
-        k = bal / self.start_balance if self.start_balance else 1.0
+        # Ограничиваем масштаб неотрицательным значением: после глубокой
+        # просадки баланс может уйти в минус — это не должно превратить
+        # ставки в "отрицательные" (иначе проигрыш вдруг начнёт давать +Δ).
+        if self.start_balance <= 0:
+            k = 1.0
+        else:
+            k = max(bal, 0.0) / self.start_balance
         return BetSizes(
             r1=round(self.base.r1 * k, 2),
             r2=round(self.base.r2 * k, 2),
@@ -78,7 +84,22 @@ class BalanceManager:
         выигран (+ставка · (кф−1)); дальнейшие раунды не торгуем.
 
         Возвращает (result_label, total_delta, win_round_or_None).
+
+        Особые случаи:
+          * пустой `rounds_in_range` → ('VOID', 0.0, None). Бывает, если
+            матч вообще не дошёл до целевого диапазона (например, сигнал
+            на 4–6, а матч закончился на 3-м раунде). Ни одна ставка не
+            делалась, поэтому это не проигрыш и не выигрыш.
+          * `fat_coefficient` ≤ 1.0 защищён: чистый P/L по Fatality может
+            стать отрицательным при кф < 1, но в этом модуле мы такое не
+            допускаем и возвращаем ('VOID', 0.0, None) — это явная
+            аномалия данных, сигнал обрабатывать нельзя.
         """
+        if not rounds_in_range:
+            return ("VOID", 0.0, None)
+        if fat_coefficient is None or fat_coefficient <= 1.0:
+            return ("VOID", 0.0, None)
+
         bets = self.scaled_bets()
         stage = 0
         total_delta = 0.0
@@ -93,7 +114,7 @@ class BalanceManager:
                 total_delta += delta
                 self.apply_delta(delta, f"{match_no} dogon WIN stage{stage} r{rn}")
                 win_round = rn
-                return ("WIN", total_delta, win_round)
+                return ("WIN", round(total_delta, 2), win_round)
             else:
                 # Brutality / Regular: для догона на Fatality это проигрыш.
                 delta = -stake
@@ -101,7 +122,7 @@ class BalanceManager:
                 self.apply_delta(delta, f"{match_no} dogon LOSS stage{stage} r{rn}")
 
         # Все три шага отыграны без Fatality: догон проигран.
-        return ("LOSS", total_delta, None)
+        return ("LOSS", round(total_delta, 2), None)
 
     # --------------------------------------------------------- reporting
 

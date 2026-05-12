@@ -241,7 +241,16 @@ class MKXBot:
         if sig is None or sig["result"] is not None:
             return
         tr = sig["target_range"]
-        low, high = (1, 3) if tr == "1-3" else (4, 6)
+        if tr == "1-3":
+            low, high = 1, 3
+        elif tr == "4-6":
+            low, high = 4, 6
+        else:
+            log.error(
+                "Signal %s has unknown target_range=%r — cannot settle",
+                match_no, tr,
+            )
+            return
 
         with self.db._conn() as c:  # noqa: SLF001
             cur = c.execute(

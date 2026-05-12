@@ -144,6 +144,9 @@ class DBManager:
             cur = c.execute("SELECT 1 FROM matches WHERE match_no = ?", (m.match_no,))
             exists = cur.fetchone() is not None
             if exists:
+                # "finished" бит монотонный: как только матч завершился
+                # (получили #T<N>), MessageEdited по тому же сообщению не
+                # должен сбросить его обратно в 0. Поэтому берём MAX.
                 c.execute(
                     """UPDATE matches SET
                           line = COALESCE(?, line),
@@ -162,7 +165,7 @@ class DBManager:
                           fbr_none = COALESCE(?, fbr_none),
                           message_id = COALESCE(?, message_id),
                           raw_message = COALESCE(?, raw_message),
-                          finished = COALESCE(?, finished),
+                          finished = MAX(finished, COALESCE(?, finished)),
                           updated_at = ?
                        WHERE match_no = ?""",
                     (

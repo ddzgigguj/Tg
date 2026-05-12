@@ -237,5 +237,146 @@ def run() -> None:
         os.unlink(dbpath)
 
 
+def _run_regression_tests() -> None:
+    """Дополнительные регрессии после bug-sweep."""
+    from mkx_bot.parser import parse_message
+    from mkx_bot.db_manager import DBManager
+    from mkx_bot.balance import BalanceManager
+    from mkx_bot.analyzer import Analyzer
+    from mkx_bot.config import settings, _parse_signal_chat
+    from mkx_bot.models import Match, Round
+
+    # R1. MessageEdited не должен сбросить finished=1 обратно в 0.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        dbpath = f.name
+    try:
+        db = DBManager(dbpath)
+        m = Match(
+            match_no="R1", line="1",
+            match_time="2026-05-12T10:00:00", match_ts=1,
+            p1_name_ru="Райдэн", p2_name_ru="СоняБлейд",
+            p1_name_en="Raiden", p2_name_en="Sonya Blade",
+            p1m=1.5, p2m=2.5, p1_round=1.7, p2_round=2.1,
+            fbr_fatality=3.0, fbr_brutality=5.0, fbr_none=1.5,
+            finished=1,
+        )
+        db.upsert_match(m)                              # finished=1
+        m.finished = 0                                  # как если бы пришёл edit
+        db.upsert_match(m)
+        with db._conn() as c:
+            row = c.execute(
+                "SELECT finished FROM matches WHERE match_no='R1'"
+            ).fetchone()
+        assert int(row["finished"]) == 1, (
+            f"finished должен остаться 1 после MessageEdited, "
+            f"получили {row['finished']}"
+        )
+        print("[R1] MessageEdited keeps finished=1 OK")
+    finally:
+        os.unlink(dbpath)
+
+    # R2. Пустой целевой диапазон → VOID, никакой записи в баланс.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        dbpath = f.name
+    try:
+        db = DBManager(dbpath)
+        bal = BalanceManager(db, 1000, 100, 220, 480)
+        result, delta, wr = bal.settle_dogon(
+            rounds_in_range=[], fat_coefficient=4.0, match_no="E1"
+        )
+        assert result == "VOID" and delta == 0.0 and wr is None
+        assert bal.current() == 1000.0  # баланс не изменился
+        print("[R2] empty target range -> VOID, balance untouched OK")
+    finally:
+        os.unlink(dbpath)
+
+    # R3. fat_coefficient <= 1 → VOID, не считаем как WIN.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        dbpath = f.name
+    try:
+        db = DBManager(dbpath)
+        bal = BalanceManager(db, 1000, 100, 220, 480)
+        result, delta, _ = bal.settle_dogon(
+            rounds_in_range=[(1, "F")], fat_coefficient=0.8, match_no="E2"
+        )
+        assert result == "VOID" and delta == 0.0
+        print("[R3] fat_coef<=1 -> VOID OK")
+    finally:
+        os.unlink(dbpath)
+
+    # R4. Отрицательный баланс не должен давать отрицательные ставки.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        dbpath = f.name
+    try:
+        db = DBManager(dbpath)
+        bal = BalanceManager(db, 1000, 100, 220, 480)
+        bal.apply_delta(-1500, "test big loss")  # банк -500
+        bets = bal.scaled_bets()
+        assert bets.r1 == 0 and bets.r2 == 0 and bets.r3 == 0, bets
+        print("[R4] negative balance clamps bets to 0 OK")
+    finally:
+        os.unlink(dbpath)
+
+    # R5. Кф вне [2,5) должен давать блокер coef_bucket.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        dbpath = f.name
+    try:
+        db = DBManager(dbpath)
+        az = Analyzer(db, settings)
+        m = Match(
+            match_no="E5", line="1",
+            match_time="2026-05-12T11:00:00", match_ts=1,
+            p1_name_ru="Райдэн", p2_name_ru="СоняБлейд",
+            p1_name_en="Raiden", p2_name_en="Sonya Blade",
+            p1m=1.5, p2m=2.5, p1_round=1.7, p2_round=2.1,
+            fbr_fatality=6.5,                             # вне 2..4.99
+            fbr_brutality=5.0, fbr_none=1.5,
+        )
+        res = az.evaluate_new_match(m)
+        assert res.enter is False
+        assert "coef_bucket" in res.blockers, res.blockers
+        print(f"[R5] out-of-range coef -> blocker={res.blockers['coef_bucket']!r}")
+    finally:
+        os.unlink(dbpath)
+
+    # R6. Битое время матча → блокер time, вход заблокирован.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        dbpath = f.name
+    try:
+        db = DBManager(dbpath)
+        az = Analyzer(db, settings)
+        m = Match(
+            match_no="E6", line="1",
+            match_time=None, match_ts=None,     # нет времени
+            p1_name_ru="Райдэн", p2_name_ru="СоняБлейд",
+            p1_name_en="Raiden", p2_name_en="Sonya Blade",
+            p1m=1.5, p2m=2.5, p1_round=1.7, p2_round=2.1,
+            fbr_fatality=3.0, fbr_brutality=5.0, fbr_none=1.5,
+        )
+        res = az.evaluate_new_match(m)
+        assert res.enter is False and "time" in res.blockers
+        print("[R6] missing match_time -> blocked (no server TZ fallback) OK")
+    finally:
+        os.unlink(dbpath)
+
+    # R7. _parse_signal_chat обрабатывает разные форматы правильно.
+    assert _parse_signal_chat("-1001234567890") == -1001234567890
+    assert _parse_signal_chat("@my_group") == "@my_group"
+    assert _parse_signal_chat("my_group") == "@my_group"
+    assert _parse_signal_chat("https://t.me/my_group") == "@my_group"
+    # инвайт-ссылки Bot API не резолвит — должны быть пусты
+    assert _parse_signal_chat("https://t.me/+abcdEFGhij") == ""
+    assert _parse_signal_chat("https://t.me/joinchat/xxxx") == ""
+    assert _parse_signal_chat("") == ""
+    assert _parse_signal_chat("  ") == ""
+    print("[R7] SIGNAL_CHAT parsing covers invite links, urls, @names, ids OK")
+
+
 if __name__ == "__main__":
     run()
+    print()
+    print("=" * 60)
+    print("Regression suite (post bug-sweep):")
+    print("=" * 60)
+    _run_regression_tests()
+    print("\nAll regression checks passed.")

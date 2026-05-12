@@ -41,15 +41,23 @@ def _env_int(name: str, default: int) -> int:
 def _parse_signal_chat(raw: str) -> str | int:
     """SIGNAL_CHAT может быть:
       - "@username" публичной группы/канала,
-      - "https://t.me/…" — вырежем @username,
+      - "https://t.me/<username>" — вырежем юзернейм,
       - числовой chat_id супергруппы ("-1001234567890") или лички ("123456").
-    Возвращаем подходящий для send_message объект: int или строку.
+    Инвайт-ссылки "https://t.me/+hash" и "https://t.me/joinchat/..." НЕ
+    поддерживаются для Bot API: вернём пустую строку и положимся на явный
+    числовой id (его пользователь получит через /start в нужной группе).
     """
     s = (raw or "").strip()
     if not s:
         return ""
     if s.startswith("https://t.me/"):
-        s = "@" + s.rsplit("/", 1)[-1]
+        path = s[len("https://t.me/"):]
+        # Приватные инвайт-ссылки Bot API резолвить не умеет
+        if path.startswith("+") or path.startswith("joinchat/"):
+            return ""
+        # Берём первый сегмент (игнорируем /topic и пр.)
+        tail = path.split("/", 1)[0]
+        s = "@" + tail
     # Чисто число (возможно с минусом)
     try:
         return int(s)
