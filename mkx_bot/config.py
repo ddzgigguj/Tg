@@ -84,7 +84,9 @@ class Settings:
     bet_r2: float = float(_env("BET_R2", "220") or 220)
     bet_r3: float = float(_env("BET_R3", "480") or 480)
 
-    timezone: str = _env("TIMEZONE", "Europe/Moscow") or "Europe/Moscow"
+    # ВНИМАНИЕ: никакой настройки TIMEZONE. Время матча (для коридоров и
+    # "мёртвых минут") берётся исключительно из первой строки сообщения
+    # канала — "HH:MM DD-MM-YYYY". Канал сам задаёт локальную шкалу.
 
     # ---------- стратегия «Золотой догон v3.0» из ТЗ -------------------------
 

@@ -308,11 +308,24 @@ class Analyzer:
                 f"П2={p2} — не Донор из списка стратегии «Золотой догон»"
             )
 
-        # 2. Время, dead minutes, razor wave
-        try:
-            dt = datetime.fromisoformat(m.match_time) if m.match_time else datetime.now()
-        except Exception:
-            dt = datetime.now()
+        # 2. Время матча и зависящие от него фильтры.
+        # Важно: никакой серверной/локальной TZ — время берём ИСКЛЮЧИТЕЛЬНО
+        # из первой строки сообщения канала ("HH:MM DD-MM-YYYY"). Если
+        # время распарсить не удалось — это блокер, а не повод взять часы
+        # сервера. Коридор и мёртвые минуты иначе окажутся рассчитаны
+        # относительно произвольной машины, где крутится бот.
+        dt = None
+        if m.match_time:
+            try:
+                dt = datetime.fromisoformat(m.match_time)
+            except Exception:
+                dt = None
+        if dt is None:
+            result.blockers["time"] = (
+                "не удалось определить время матча из первой строки "
+                "сообщения (HH:MM DD-MM-YYYY)"
+            )
+            return result
 
         if self.dead_minute(dt):
             result.blockers["dead_minute"] = (
