@@ -38,6 +38,36 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _parse_signal_chat(raw: str) -> str | int:
+    """SIGNAL_CHAT может быть:
+      - "@username" публичной группы/канала,
+      - "https://t.me/<username>" — вырежем юзернейм,
+      - числовой chat_id супергруппы ("-1001234567890") или лички ("123456").
+    Инвайт-ссылки "https://t.me/+hash" и "https://t.me/joinchat/..." НЕ
+    поддерживаются для Bot API: вернём пустую строку и положимся на явный
+    числовой id (его пользователь получит через /start в нужной группе).
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    if s.startswith("https://t.me/"):
+        path = s[len("https://t.me/"):]
+        # Приватные инвайт-ссылки Bot API резолвить не умеет
+        if path.startswith("+") or path.startswith("joinchat/"):
+            return ""
+        # Берём первый сегмент (игнорируем /topic и пр.)
+        tail = path.split("/", 1)[0]
+        s = "@" + tail
+    # Чисто число (возможно с минусом)
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    if not s.startswith("@"):
+        s = "@" + s
+    return s
+
+
 @dataclass(frozen=True)
 class Settings:
     # ---------- интеграции Telegram ------------------------------------------
@@ -49,7 +79,9 @@ class Settings:
     source_channel: str = _env("SOURCE_CHANNEL", "@statamk10") or "@statamk10"
 
     telegram_bot_token: str = _env("TELEGRAM_BOT_TOKEN", "") or ""
-    signal_chat: str = _env("SIGNAL_CHAT", "") or ""
+    signal_chat: str | int = field(
+        default_factory=lambda: _parse_signal_chat(_env("SIGNAL_CHAT", "") or "")
+    )
 
     db_path: str = _env("DB_PATH", "mkx_bot.db") or "mkx_bot.db"
 
@@ -60,7 +92,9 @@ class Settings:
     bet_r2: float = float(_env("BET_R2", "220") or 220)
     bet_r3: float = float(_env("BET_R3", "480") or 480)
 
-    timezone: str = _env("TIMEZONE", "Europe/Moscow") or "Europe/Moscow"
+    # ВНИМАНИЕ: никакой настройки TIMEZONE. Время матча (для коридоров и
+    # "мёртвых минут") берётся исключительно из первой строки сообщения
+    # канала — "HH:MM DD-MM-YYYY". Канал сам задаёт локальную шкалу.
 
     # ---------- стратегия «Золотой догон v3.0» из ТЗ -------------------------
 

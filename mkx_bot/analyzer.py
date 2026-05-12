@@ -203,7 +203,7 @@ class Analyzer:
         )
         n50, p50 = windows.get(50, (0, 0.0))
         if n50 == 0:
-            return (False, f"выборка 50 матчей пуста — нельзя оценить")
+            return (False, "выборка 50 матчей пуста — нельзя оценить")
         if p50 < base_threshold:
             return (False,
                     f"фатовость по 50-матчной выборке {p50:.2f} < {base_threshold:.2f}")
@@ -308,11 +308,24 @@ class Analyzer:
                 f"П2={p2} — не Донор из списка стратегии «Золотой догон»"
             )
 
-        # 2. Время, dead minutes, razor wave
-        try:
-            dt = datetime.fromisoformat(m.match_time) if m.match_time else datetime.now()
-        except Exception:
-            dt = datetime.now()
+        # 2. Время матча и зависящие от него фильтры.
+        # Важно: никакой серверной/локальной TZ — время берём ИСКЛЮЧИТЕЛЬНО
+        # из первой строки сообщения канала ("HH:MM DD-MM-YYYY"). Если
+        # время распарсить не удалось — это блокер, а не повод взять часы
+        # сервера. Коридор и мёртвые минуты иначе окажутся рассчитаны
+        # относительно произвольной машины, где крутится бот.
+        dt = None
+        if m.match_time:
+            try:
+                dt = datetime.fromisoformat(m.match_time)
+            except Exception:
+                dt = None
+        if dt is None:
+            result.blockers["time"] = (
+                "не удалось определить время матча из первой строки "
+                "сообщения (HH:MM DD-MM-YYYY)"
+            )
+            return result
 
         if self.dead_minute(dt):
             result.blockers["dead_minute"] = (
@@ -352,7 +365,16 @@ class Analyzer:
                 result.corridor_prob = cd.p_fat_1_3 or 0.0
 
         # 4. Фатовость персонажей в нужном диапазоне и бакете кф
-        coef_bucket = _coef_bucket(m.fbr_fatality) or "2-2.99"
+        coef_bucket = _coef_bucket(m.fbr_fatality)
+        if coef_bucket is None:
+            # Cybernagual таблицы охватывают только 2.00-4.99. Всё, что
+            # вне этого диапазона (слишком низкий или слишком высокий кф),
+            # стратегия не покрывает — явный блок вместо тихого fallback.
+            result.blockers["coef_bucket"] = (
+                f"кф Fatality {m.fbr_fatality} вне поддерживаемых "
+                f"диапазонов стратегии (2.00–4.99)"
+            )
+            return result
         tr = result.target_range or "1-3"
 
         p1_win = self.db.character_fatovost(p1, "P1", tr, coef_bucket)
