@@ -38,6 +38,28 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _parse_signal_chat(raw: str) -> str | int:
+    """SIGNAL_CHAT может быть:
+      - "@username" публичной группы/канала,
+      - "https://t.me/…" — вырежем @username,
+      - числовой chat_id супергруппы ("-1001234567890") или лички ("123456").
+    Возвращаем подходящий для send_message объект: int или строку.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    if s.startswith("https://t.me/"):
+        s = "@" + s.rsplit("/", 1)[-1]
+    # Чисто число (возможно с минусом)
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    if not s.startswith("@"):
+        s = "@" + s
+    return s
+
+
 @dataclass(frozen=True)
 class Settings:
     # ---------- интеграции Telegram ------------------------------------------
@@ -49,7 +71,9 @@ class Settings:
     source_channel: str = _env("SOURCE_CHANNEL", "@statamk10") or "@statamk10"
 
     telegram_bot_token: str = _env("TELEGRAM_BOT_TOKEN", "") or ""
-    signal_chat: str = _env("SIGNAL_CHAT", "") or ""
+    signal_chat: str | int = field(
+        default_factory=lambda: _parse_signal_chat(_env("SIGNAL_CHAT", "") or "")
+    )
 
     db_path: str = _env("DB_PATH", "mkx_bot.db") or "mkx_bot.db"
 
